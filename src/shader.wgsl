@@ -82,8 +82,8 @@ fn vs_main(v: Vertex) -> VsData {
     final_normal.w = 0.0;
 
     // DEBUG
-    final_position = vec4(v.position, 1.0);
-    final_normal = vec4(v.normal, 0.0);
+    // final_position = vec4(v.position, 1.0);
+    // final_normal = vec4(v.normal, 0.0);
 
     return VsData(
         uniforms.mvp * final_position,
@@ -99,20 +99,23 @@ fn fs_main(vin: VsData) -> @location(0) vec4<f32> {
     let mode = u32(uniforms.debug.x);
     if mode == MODE_WEIGHTS {
         let selected_bone = i32(uniforms.debug.y);
+        var weight = 0.0;
         if (vin.indices[0u] == selected_bone) {
-            color = vec3(vin.weights[0u]);
+            weight = vin.weights[0u];
         }
         else if (vin.indices[1u] == selected_bone) {
-            color = vec3(vin.weights[1u]);
+            weight = vin.weights[1u];
         }
         else if (vin.indices[2u] == selected_bone) {
-            color = vec3(vin.weights[2u]);
+            weight = vin.weights[2u];
         }
         else if (vin.indices[3u] == selected_bone) {
-            color = vec3(vin.weights[3u]);
+            weight = vin.weights[3u];
         }
+        color = mix(vec3(0.0, 0.0, 1.0), vec3(1.0, 0.0, 0.0), weight);
     } else {
-        color = vec3(dot(vin.normal, vec3<f32>(0.0, 1.0, 0.0)));
+        let normal = normalize(vin.normal);
+        color = vec3(clamp(dot(normal, vec3<f32>(0.0, 0.0, -1.0)), 0.0, 1.0));
     }
     return vec4(color, 1.0);
 }

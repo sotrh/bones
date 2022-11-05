@@ -1,4 +1,7 @@
-use std::{f32::consts::{PI, TAU}, io::Write};
+use std::{
+    f32::consts::{PI, TAU},
+    io::Write,
+};
 
 use bytemuck::{bytes_of, cast_slice};
 use wgpu::util::DeviceExt;
@@ -245,7 +248,7 @@ fn main() -> anyhow::Result<()> {
                 let (s, c) = theta.sin_cos();
                 let normal = glam::vec3(c, 0.0, s);
                 let position = p + normal * width;
-                let indices = [ring_index, ring_index + 1, -1, -1];
+                let indices = [bone_index as i32, bone_index as i32 + 1, -1, -1];
                 let weights = [1.0 - factor, factor, 0.0, 0.0];
                 Vertex {
                     position,
@@ -257,29 +260,40 @@ fn main() -> anyhow::Result<()> {
         }));
 
         // Rings
-        for ring in 0..num_rings-1 {
+        for ring in 0..num_rings - 1 {
             let ring_offset = ring as u32 * sections;
             indices.extend((0..sections).flat_map(|si| {
                 let bot_l = start_index + si + ring_offset;
                 let bot_r = start_index + (si + 1) % sections + ring_offset;
                 let top_l = sections + bot_l;
                 let top_r = sections + bot_r;
-                [
-                    bot_l,
-                    bot_r,
-                    top_r,
-                    bot_l,
-                    top_r,
-                    top_l,
-                ]
+                [bot_l, bot_r, top_r, bot_l, top_r, top_l]
             }));
-
         }
     }
     {
         let mut debug_txt = std::fs::File::create("target/indices.csv")?;
         for chunk in indices.chunks(3) {
             writeln!(&mut debug_txt, "{}, {}, {}", chunk[0], chunk[1], chunk[2])?;
+        }
+    }
+    {
+        let mut debug_txt = std::fs::File::create("target/vertex_indices.csv")?;
+        writeln!(&mut debug_txt, "V, I0, I1, I2, I3, W0, W1, W2, W3")?;
+        for (i, v) in vertices.iter().enumerate() {
+            writeln!(
+                &mut debug_txt,
+                "{}, {}, {}, {}, {}, {}, {}, {}, {}",
+                i,
+                v.indices[0],
+                v.indices[1],
+                v.indices[2],
+                v.indices[3],
+                v.weights[0],
+                v.weights[1],
+                v.weights[2],
+                v.weights[3],
+            )?;
         }
     }
     let num_indices = indices.len() as u32;
@@ -322,7 +336,7 @@ fn main() -> anyhow::Result<()> {
         format: depth_format,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
     };
-    let mut depth_buffer = device.create_texture(&depth_desc);
+    let depth_buffer = device.create_texture(&depth_desc);
     let mut depth_view = depth_buffer.create_view(&wgpu::TextureViewDescriptor::default());
 
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -366,6 +380,7 @@ fn main() -> anyhow::Result<()> {
 
     println!("Finished rendering setup");
 
+    let mut uniforms_dirty = true;
     window.set_visible(true);
     event_loop.run(move |event, _, control_flow| match event {
         Event::WindowEvent {
@@ -386,7 +401,26 @@ fn main() -> anyhow::Result<()> {
             ..
         } => match (key, state == ElementState::Pressed) {
             (VirtualKeyCode::Escape, true) => control_flow.set_exit(),
-            (VirtualKeyCode::Space, true) => {}
+            (VirtualKeyCode::Space, true) => {
+                uniforms.debug.x = (uniforms.debug.x + 1.0) % 2.0;
+                uniforms_dirty = true;
+            }
+            (VirtualKeyCode::Numpad0 | VirtualKeyCode::Key0, true) => {
+                uniforms.debug.y = 0.0;
+                uniforms_dirty = true;
+            }
+            (VirtualKeyCode::Numpad1 | VirtualKeyCode::Key1, true) => {
+                uniforms.debug.y = 1.0;
+                uniforms_dirty = true;
+            }
+            (VirtualKeyCode::Numpad2 | VirtualKeyCode::Key2, true) => {
+                uniforms.debug.y = 2.0;
+                uniforms_dirty = true;
+            }
+            (VirtualKeyCode::Numpad3 | VirtualKeyCode::Key3, true) => {
+                uniforms.debug.y = 3.0;
+                uniforms_dirty = true;
+            }
             _ => (),
         },
         Event::WindowEvent {
@@ -398,13 +432,17 @@ fn main() -> anyhow::Result<()> {
             surface.configure(&device, &surf_config);
             depth_desc.size.width = size.width;
             depth_desc.size.height = size.height;
-            depth_buffer = device.create_texture(&depth_desc);
+            let depth_buffer = device.create_texture(&depth_desc);
             depth_view = depth_buffer.create_view(&wgpu::TextureViewDescriptor::default());
         }
         Event::RedrawEventsCleared => window.request_redraw(),
         Event::RedrawRequested(_) => {
             match surface.get_current_texture() {
                 Ok(surf_tex) => {
+                    if uniforms_dirty {
+                        queue.write_buffer(&uniform_buffer, 0, bytes_of(&uniforms));
+                        uniforms_dirty = false;
+                    }
                     let view = surf_tex
                         .texture
                         .create_view(&wgpu::TextureViewDescriptor::default());
