@@ -119,3 +119,8 @@ fn fs_main(vin: VsData) -> @location(0) vec4<f32> {
     }
     return vec4(color, 1.0);
 }
+
+@fragment
+fn fs_skeleton(vin: VsData) -> @location(0) vec4<f32> {
+    return vec4(0.0, 1.0, 0.0, 1.0);
+}

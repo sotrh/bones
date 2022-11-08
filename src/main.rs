@@ -53,6 +53,7 @@ impl Bone {
 #[derive(Debug)]
 struct SimpleSkeleton {
     bones: Vec<Bone>,
+    animation_time: f32,
     // In a real application this would likely be keyframes
     pose: Vec<glam::Mat4>,
     inv_bind_pose: Vec<glam::Mat4>,
@@ -65,10 +66,10 @@ impl SimpleSkeleton {
             .iter()
             .map(|b| {
                 let transform = parent_matrix * b.to_mat4();
-                parent_matrix = transform
-                    * glam::Mat4::from_translation(
-                        b.orientation.mul_vec3(glam::vec3(0.0, b.length, 0.0)),
-                    );
+                let translation = glam::Mat4::from_translation(
+                    glam::vec3(0.0, b.length, 0.0),
+                );
+                parent_matrix = transform * translation;
                 transform
             })
             .collect::<Vec<_>>();
@@ -79,8 +80,29 @@ impl SimpleSkeleton {
 
         Self {
             bones,
+            animation_time: 0.0,
             pose,
             inv_bind_pose,
+        }
+    }
+
+    pub fn update(&mut self, dt: instant::Duration) {
+        self.animation_time += dt.as_secs_f32();
+        self.animation_time %= TAU;
+        let angle = self.animation_time.sin() * PI / 4.0;
+        let axis = glam::vec3(0.0, 0.0, 1.0);
+        let mut parent_matrix = glam::Mat4::IDENTITY;
+        for (i, bone) in self.bones.iter_mut().enumerate() {
+            bone.orientation = glam::Quat::from_axis_angle(axis, angle);
+
+            let transform = parent_matrix * bone.to_mat4();
+            let translation = glam::Mat4::from_translation(glam::vec3(
+                0.0,
+                bone.length,
+                0.0,
+            ));
+            parent_matrix = transform * translation;
+            self.pose[i] = transform;
         }
     }
 }
@@ -93,35 +115,30 @@ fn main() -> anyhow::Result<()> {
 
     // Setup data
 
-    let bones = vec![
+    let axis = glam::vec3(1.0, 0.0, 0.0);
+    let num_bones = 4;
+    let length = 2.0 / num_bones as f32;
+    let bones = (0..num_bones).map(|_| {
         Bone {
-            length: 1.0,
-            offset: glam::vec3(0.0, 0.0, 0.0),
-            orientation: glam::Quat::IDENTITY,
-        },
-        Bone {
-            length: 1.0,
-            offset: glam::vec3(0.0, 0.0, 0.0),
-            orientation: glam::Quat::IDENTITY,
-        },
-        Bone {
-            length: 1.0,
-            offset: glam::vec3(0.0, 0.0, 0.0),
-            orientation: glam::Quat::IDENTITY,
-        },
-        Bone {
-            length: 1.0,
-            offset: glam::vec3(0.0, 0.0, 0.0),
-            orientation: glam::Quat::IDENTITY,
-        },
-    ];
-    let skeleton = SimpleSkeleton::new(bones);
+            length,
+            offset: glam::Vec3::ZERO,
+            orientation: glam::Quat::from_axis_angle(axis, 0.0),
+        }
+    }).collect::<Vec<_>>();
+    let mut skeleton = SimpleSkeleton::new(bones);
 
-    let model = glam::Mat4::from_translation(glam::vec3(0.0, 0.0, 1.0));
+    let model = glam::Mat4::from_translation(glam::vec3(0.0, 0.0, 0.0));
+    let view = glam::Mat4::look_at_lh(
+        glam::vec3(0.0, 2.0, -5.0),
+        glam::vec3(0.0, 0.0, 0.0),
+        glam::vec3(0.0, 1.0, 0.0),
+    );
+    let proj = glam::Mat4::perspective_lh(PI / 4.0, 1.0, 0.1, 100.0);
+    let mv = view * model;
     let mut uniforms = Uniforms {
         debug: glam::Vec4::ZERO,
-        mv: model,
-        mvp: model,
+        mv: mv,
+        mvp: proj * mv,
     };
 
     // Setup rendering
@@ -223,9 +240,10 @@ fn main() -> anyhow::Result<()> {
     });
 
     let sections = 8;
-    let num_rings = 4;
+    let num_rings = 6;
     let width = 0.2;
     let mut vertices = Vec::new();
+    let mut skeleton_vertices = Vec::new();
     let mut indices = Vec::new();
     let mut last_p = glam::Vec3::new(0.0, 0.0, 0.0);
     for (bone_index, b) in skeleton.bones.iter().enumerate() {
@@ -234,22 +252,30 @@ fn main() -> anyhow::Result<()> {
         last_p = top;
 
         let start_index = vertices.len() as u32;
+        let bone_index = bone_index as i32;
+        let next_bone = (bone_index + 1).min(skeleton.bones.len() as i32 - 1);
+        skeleton_vertices.push(Vertex {
+            position: bot,
+            normal: glam::vec3(0.0, 0.0, -1.0),
+            indices: [bone_index, -1, -1, -1],
+            weights: [1.0, 0.0, 0.0, 0.0],
+        });
+        skeleton_vertices.push(Vertex {
+            position: top,
+            normal: glam::vec3(0.0, 0.0, -1.0),
+            indices: [next_bone, -1, -1, -1],
+            weights: [1.0, 0.0, 0.0, 0.0],
+        });
         vertices.extend((0..num_rings).flat_map(|ring_index| {
-            let factor = match ring_index {
-                0 => 0.0,
-                1 => 0.1,
-                2 => 0.9,
-                3 => 1.0,
-                _ => unreachable!(),
-            };
+            let factor = ring_index as f32 / (num_rings - 1) as f32;
             let p = bot.lerp(top, factor);
+            let indices = [bone_index, next_bone, -1, -1];
+            let weights = [1.0, 0.0, 0.0, 0.0];
             (0..sections).map(move |section| {
                 let theta = section as f32 / sections as f32 * TAU;
                 let (s, c) = theta.sin_cos();
                 let normal = glam::vec3(c, 0.0, s);
                 let position = p + normal * width;
-                let indices = [bone_index as i32, bone_index as i32 + 1, -1, -1];
-                let weights = [1.0 - factor, factor, 0.0, 0.0];
                 Vertex {
                     position,
                     normal,
@@ -271,33 +297,14 @@ fn main() -> anyhow::Result<()> {
             }));
         }
     }
-    {
-        let mut debug_txt = std::fs::File::create("target/indices.csv")?;
-        for chunk in indices.chunks(3) {
-            writeln!(&mut debug_txt, "{}, {}, {}", chunk[0], chunk[1], chunk[2])?;
-        }
-    }
-    {
-        let mut debug_txt = std::fs::File::create("target/vertex_indices.csv")?;
-        writeln!(&mut debug_txt, "V, I0, I1, I2, I3, W0, W1, W2, W3")?;
-        for (i, v) in vertices.iter().enumerate() {
-            writeln!(
-                &mut debug_txt,
-                "{}, {}, {}, {}, {}, {}, {}, {}, {}",
-                i,
-                v.indices[0],
-                v.indices[1],
-                v.indices[2],
-                v.indices[3],
-                v.weights[0],
-                v.weights[1],
-                v.weights[2],
-                v.weights[3],
-            )?;
-        }
-    }
     let num_indices = indices.len() as u32;
+    let num_skeleton_verts = skeleton_vertices.len() as u32;
 
+    let skeleton_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: None,
+        contents: cast_slice(&skeleton_vertices),
+        usage: wgpu::BufferUsages::VERTEX,
+    });
     let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: None,
         contents: cast_slice(&vertices),
@@ -339,48 +346,33 @@ fn main() -> anyhow::Result<()> {
     let depth_buffer = device.create_texture(&depth_desc);
     let mut depth_view = depth_buffer.create_view(&wgpu::TextureViewDescriptor::default());
 
-    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: None,
-        bind_group_layouts: &[&uniform_layout],
-        push_constant_ranges: &[],
-    });
-
-    let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: None,
-        layout: Some(&pipeline_layout),
-        vertex: wgpu::VertexState {
-            module: &shader,
-            entry_point: "vs_main",
-            buffers: &[vertex_layout],
-        },
-        primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleList,
-            cull_mode: None,
-            ..Default::default()
-        },
-        depth_stencil: Some(wgpu::DepthStencilState {
-            format: depth_format,
-            depth_write_enabled: true,
-            depth_compare: wgpu::CompareFunction::Less,
-            stencil: wgpu::StencilState::default(),
-            bias: wgpu::DepthBiasState::default(),
-        }),
-        multisample: wgpu::MultisampleState::default(),
-        fragment: Some(wgpu::FragmentState {
-            module: &shader,
-            entry_point: "fs_main",
-            targets: &[Some(wgpu::ColorTargetState {
-                format: surf_config.format,
-                blend: None,
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-        }),
-        multiview: None,
-    });
+    let render_pipeline = create_render_pipeline(
+        &device,
+        &uniform_layout,
+        &shader,
+        vertex_layout.clone(),
+        Some(depth_format),
+        &surf_config,
+        wgpu::PrimitiveTopology::TriangleList,
+        "vs_main",
+        "fs_main",
+    );
+    let skeleton_pipeline = create_render_pipeline(
+        &device,
+        &uniform_layout,
+        &shader,
+        vertex_layout,
+        None,
+        &surf_config,
+        wgpu::PrimitiveTopology::LineList,
+        "vs_main",
+        "fs_skeleton",
+    );
 
     println!("Finished rendering setup");
 
     let mut uniforms_dirty = true;
+    let mut last_time = instant::Instant::now();
     window.set_visible(true);
     event_loop.run(move |event, _, control_flow| match event {
         Event::WindowEvent {
@@ -434,6 +426,13 @@ fn main() -> anyhow::Result<()> {
             depth_desc.size.height = size.height;
             let depth_buffer = device.create_texture(&depth_desc);
             depth_view = depth_buffer.create_view(&wgpu::TextureViewDescriptor::default());
+            uniforms.mvp = glam::Mat4::perspective_lh(
+                PI / 4.0,
+                size.width as f32 / size.height as f32,
+                0.1,
+                100.0,
+            ) * uniforms.mv;
+            uniforms_dirty = true;
         }
         Event::RedrawEventsCleared => window.request_redraw(),
         Event::RedrawRequested(_) => {
@@ -443,11 +442,21 @@ fn main() -> anyhow::Result<()> {
                         queue.write_buffer(&uniform_buffer, 0, bytes_of(&uniforms));
                         uniforms_dirty = false;
                     }
+
+                    let now = instant::Instant::now();
+                    let dt = now - last_time;
+                    last_time = now;
+
+                    skeleton.update(dt);
+                    queue.write_buffer(&pose_buffer, 0, cast_slice(&skeleton.pose));
+
                     let view = surf_tex
                         .texture
                         .create_view(&wgpu::TextureViewDescriptor::default());
                     let mut encoder = device
                         .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+
+                    // Mesh
                     let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: None,
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -473,6 +482,27 @@ fn main() -> anyhow::Result<()> {
                     rpass.set_bind_group(0, &uniform_bind_group, &[]);
                     rpass.draw_indexed(0..num_indices, 0, 0..1);
                     drop(rpass);
+
+                    // Skeleton
+                    if uniforms.debug.x > 0.0 {
+                        let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: None,
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: &view,
+                                resolve_target: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Load,
+                                    store: true,
+                                },
+                            })],
+                            depth_stencil_attachment: None,
+                        });
+                        rpass.set_pipeline(&skeleton_pipeline);
+                        rpass.set_vertex_buffer(0, skeleton_vertex_buffer.slice(..));
+                        rpass.set_bind_group(0, &uniform_bind_group, &[]);
+                        rpass.draw(0..num_skeleton_verts, 0..1);
+                    }
+
                     queue.submit([encoder.finish()]);
                     surf_tex.present()
                 }
@@ -487,4 +517,54 @@ fn main() -> anyhow::Result<()> {
         }
         _ => (),
     });
+}
+
+fn create_render_pipeline(
+    device: &wgpu::Device,
+    uniform_layout: &wgpu::BindGroupLayout,
+    shader: &wgpu::ShaderModule,
+    vertex_layout: wgpu::VertexBufferLayout,
+    depth_format: Option<wgpu::TextureFormat>,
+    surf_config: &wgpu::SurfaceConfiguration,
+    topology: wgpu::PrimitiveTopology,
+    vs_entry: &str,
+    fs_entry: &str,
+) -> wgpu::RenderPipeline {
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: None,
+        bind_group_layouts: &[&uniform_layout],
+        push_constant_ranges: &[],
+    });
+    let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: None,
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: vs_entry,
+            buffers: &[vertex_layout],
+        },
+        primitive: wgpu::PrimitiveState {
+            topology,
+            ..Default::default()
+        },
+        depth_stencil: depth_format.map(|f| wgpu::DepthStencilState {
+            format: f,
+            depth_write_enabled: true,
+            depth_compare: wgpu::CompareFunction::Less,
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        }),
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: fs_entry,
+            targets: &[Some(wgpu::ColorTargetState {
+                format: surf_config.format,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        multiview: None,
+    });
+    render_pipeline
 }

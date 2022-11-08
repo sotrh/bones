@@ -101,6 +101,7 @@ dependencies = [
  "anyhow",
  "bytemuck",
  "glam",
+ "instant",
  "pollster",
  "wgpu",
  "winit",
