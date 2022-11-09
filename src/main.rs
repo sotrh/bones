@@ -1,7 +1,4 @@
-use std::{
-    f32::consts::{PI, TAU},
-    io::Write,
-};
+use std::f32::consts::{PI, TAU};
 
 use bytemuck::{bytes_of, cast_slice};
 use wgpu::util::DeviceExt;
@@ -147,8 +144,12 @@ fn main() -> anyhow::Result<()> {
     let surface = unsafe { instance.create_surface(&window) };
     let adapter = instance
         .enumerate_adapters(wgpu::Backends::all())
+        .filter(|a| a.is_surface_supported(&surface))
         .next()
         .expect("There should be a valid adapter");
+
+    println!("Adapter: {:?}", adapter);
+    
     let (device, queue) = pollster::block_on(adapter.request_device(
         &wgpu::DeviceDescriptor {
             label: None,
@@ -158,6 +159,7 @@ fn main() -> anyhow::Result<()> {
         None,
     ))?;
 
+    println!("{:?}", surface.get_supported_formats(&adapter));
     let mut surf_config = wgpu::SurfaceConfiguration {
         usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::RENDER_ATTACHMENT,
         format: surface.get_supported_formats(&adapter)[0],
